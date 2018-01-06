@@ -1,0 +1,134 @@
+version: "2"
+
+networks:
+  default:
+  nginx-network:
+    external: true
+  docker-registry-network:
+    external: true
+
+services:
+  portus:
+    image: opensuse/portus:head
+    hostname: portus-master
+    container_name: portus-master
+    networks:
+      default:
+      nginx-network:
+    environment:
+      - CCONFIG_PREFIX=PORTUS
+      - VIRTUAL_HOST=${PORTUS_FQDN}
+      - LETSENCRYPT_HOST=${PORTUS_FQDN}
+      - LETSENCRYPT_EMAIL=${ADMIN_EMAIL}
+      - PORTUS_MACHINE_FQDN_VALUE=${PORTUS_FQDN}
+
+      - PORTUS_EMAIL_SMTP_ENABLED=${PORTUS_EMAIL_SMTP_ENABLED}
+      - PORTUS_EMAIL_SMTP_ADDRESS=${PORTUS_EMAIL_SMTP_ADDRESS}
+      - PORTUS_EMAIL_SMTP_PORT=${PORTUS_EMAIL_SMTP_PORT}
+      - PORTUS_EMAIL_SMTP_USER_NAME=${PORTUS_EMAIL_SMTP_USER_NAME}
+      - PORTUS_EMAIL_SMTP_PASSWORD=${PORTUS_EMAIL_SMTP_PASSWORD}
+      - PORTUS_EMAIL_SMTP_DOMAIN=${PORTUS_EMAIL_SMTP_DOMAIN}
+
+      - PORTUS_PRODUCTION_HOST=db
+      - PORTUS_PRODUCTION_DATABASE=portus_production
+      - PORTUS_PRODUCTION_PASSWORD=${DATABASE_PASSWORD}
+      - PORTUS_DB_POOL=5
+
+      - PORTUS_SECRET_KEY_BASE=${SECRET_KEY_BASE}
+      - PORTUS_KEY_PATH=/certificates/key.pem
+      - PORTUS_CRT_PATH=/certificates/fullchain.pem
+      - PORTUS_PASSWORD=${PORTUS_PASSWORD}
+
+      - RAILS_SERVE_STATIC_FILES='true'
+    links:
+      - db
+    volumes:
+      - /docker/docker-compose-letsencrypt-nginx-proxy-companion/data/certs/${PORTUS_FQDN}:/certificates:ro
+      - static:/srv/Portus/public
+
+  background:
+    image: opensuse/portus:head
+    hostname: portus-background
+    container_name: portus-background
+    #entrypoint: bundle exec rails runner /srv/Portus/bin/background.rb
+    networks:
+      default:
+    depends_on:
+      - portus
+      - db
+    environment:
+      - CCONFIG_PREFIX=PORTUS
+      - PORTUS_MACHINE_FQDN_VALUE=${PORTUS_FQDN}
+
+      - PORTUS_EMAIL_SMTP_ENABLED=${PORTUS_EMAIL_SMTP_ENABLED}
+      - PORTUS_EMAIL_SMTP_ADDRESS=${PORTUS_EMAIL_SMTP_ADDRESS}
+      - PORTUS_EMAIL_SMTP_PORT=${PORTUS_EMAIL_SMTP_PORT}
+      - PORTUS_EMAIL_SMTP_USER_NAME=${PORTUS_EMAIL_SMTP_USER_NAME}
+      - PORTUS_EMAIL_SMTP_PASSWORD=${PORTUS_EMAIL_SMTP_PASSWORD}
+      - PORTUS_EMAIL_SMTP_DOMAIN=${PORTUS_EMAIL_SMTP_DOMAIN}
+
+      - PORTUS_PRODUCTION_HOST=db
+      - PORTUS_PRODUCTION_DATABASE=portus_production
+      - PORTUS_PRODUCTION_PASSWORD=${DATABASE_PASSWORD}
+      - PORTUS_DB_POOL=5
+
+      - PORTUS_SECRET_KEY_BASE=${SECRET_KEY_BASE}
+      - PORTUS_KEY_PATH=/certificates/key.pem
+      - PORTUS_CRT_PATH=/certificates/fullchain.pem
+      - PORTUS_PASSWORD=${PORTUS_PASSWORD}
+
+      - PORTUS_INIT_COMMAND=bin/background.rb
+    links:
+      - db
+    volumes:
+      - /docker/docker-compose-letsencrypt-nginx-proxy-companion/data/certs/${PORTUS_FQDN}:/certificates:ro
+
+  db:
+    image: library/mariadb:10.0.23
+    hostname: portus-db
+    container_name: portus-db
+    networks:
+      default:
+    environment:
+      - MYSQL_DATABASE=portus_production
+      - MYSQL_ROOT_PASSWORD=${DATABASE_PASSWORD}
+    volumes:
+      - ./data/mariadb:/var/lib/mysql
+
+  registry:
+    image: library/registry:2.6
+    hostname: portus-registry
+    container_name: portus-registry
+    command: ["/bin/sh", "/etc/docker/registry/init"]
+    networks:
+      default:
+      nginx-network:
+      docker-registry-network:
+    environment:
+      VIRTUAL_HOST: ${REGISTRY_FQDN}
+      LETSENCRYPT_HOST: ${REGISTRY_FQDN}
+      LETSENCRYPT_EMAIL: ${ADMIN_EMAIL}
+
+      REGISTRY_AUTH: token
+      REGISTRY_HTTP_SECRET: ${REGISTRY_HTTP_SECRET}
+      REGISTRY_AUTH_TOKEN_REALM: https://${PORTUS_FQDN}/v2/token
+      REGISTRY_AUTH_TOKEN_SERVICE: ${REGISTRY_FQDN}
+      REGISTRY_AUTH_TOKEN_ISSUER: ${PORTUS_FQDN}
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /certificates/fullchain.pem
+      REGISTRY_NOTIFICATIONS_ENDPOINTS: >
+        - name: portus
+          url: https://${PORTUS_FQDN}/v2/webhooks/events
+          timeout: 2000ms
+          threshold: 5
+          backoff: 1s
+    volumes:
+      - /docker/docker-compose-letsencrypt-nginx-proxy-companion/data/certs/${PORTUS_FQDN}:/certificates:ro
+      - /var/docker/registry:/var/lib/registry
+      - ./registry/config.yml:/etc/docker/registry/config.yml:ro
+      - ./registry/init:/etc/docker/registry/init:ro
+    links:
+      - portus:portus
+
+volumes:
+  static:
+    driver: local
